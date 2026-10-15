@@ -22,7 +22,7 @@ Choose a strong password and retain it in a password manager. This creates a PRI
 The following settings are already configured in `src-tauri/tauri.conf.json`:
 
 - `plugins.updater.pubkey` contains your public verification key.
-- The endpoint points to `stetsonalmond/hybrid-command-center` on GitHub Releases.
+- The endpoint points to `almondjoy6/hybrid-command-center` on GitHub Releases.
 - Keep `bundle.createUpdaterArtifacts: true` and `bundle.targets: ["nsis"]`.
 
 ## 4. Configure GitHub Actions secrets
@@ -63,3 +63,4 @@ Create a tiny release v0.3.1 with all version fields incremented, push tag `v0.3
 - Exported backups are **plaintext JSON**. Do not put credentials, tokens, or PHI in notes/backups.
 - Backups are user-initiated, not scheduled automatic snapshots. Restore REPLACES current local dashboard data after confirmation.
 - This build is a bootstrap source project, not a verified signed Windows installer. Do not tag/publish until the first Windows build and manual QA succeed.
+
