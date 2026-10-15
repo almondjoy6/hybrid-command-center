@@ -1,5 +1,16 @@
 use serde_json::Value;
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+fn hidden_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 use tauri::ipc::Channel;
 use futures_util::StreamExt;
 
@@ -15,14 +26,27 @@ fn launch_app(app: String) -> Result<String, String> {
         "browser" => "https://www.google.com",
         _ => return Err("Unknown launcher".into()),
     };
-    Command::new("cmd").args(["/C", "start", "", target]).spawn()
+    hidden_command("cmd").args(["/C", "start", "", target]).spawn()
         .map_err(|e| format!("Launch failed: {e}"))?;
     Ok(format!("Launched {app}"))
 }
 
 #[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if url.len() > 2048 || !(url.starts_with("https://") || url.starts_with("http://")) || (url.contains('\r') || url.contains('\n')) {
+        return Err("Only valid HTTP(S) links are allowed".into());
+    }
+    #[cfg(target_os = "windows")]
+    hidden_command("rundll32.exe").arg("url.dll,FileProtocolHandler").arg(&url)
+        .spawn().map_err(|e| e.to_string())?;
+    #[cfg(not(target_os = "windows"))]
+    return Err("Windows only".into());
+    Ok(())
+}
+
+#[tauri::command]
 fn tailscale_status() -> Result<Value, String> {
-    let result = Command::new("tailscale").args(["status", "--json"]).output()
+    let result = hidden_command("tailscale").args(["status", "--json"]).output()
         .map_err(|_| "Tailscale CLI not found. Install Tailscale and ensure tailscale.exe is on PATH.".to_string())?;
     if !result.status.success() { return Err(String::from_utf8_lossy(&result.stderr).to_string()); }
     serde_json::from_slice(&result.stdout).map_err(|e| e.to_string())
@@ -30,7 +54,7 @@ fn tailscale_status() -> Result<Value, String> {
 
 #[tauri::command]
 fn gpu_stats() -> Result<Value, String> {
-    let output = Command::new("nvidia-smi")
+    let output = hidden_command("nvidia-smi")
         .args(["--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw", "--format=csv,noheader,nounits"])
         .output().map_err(|e| format!("NVIDIA-SMI unavailable: {e}"))?;
     if !output.status.success() { return Err(String::from_utf8_lossy(&output.stderr).to_string()); }
@@ -148,7 +172,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![launch_app, tailscale_status, ollama_models, ollama_chat, gpu_stats, ollama_chat_stream, export_backup, import_backup])
+        .invoke_handler(tauri::generate_handler![launch_app, open_url, tailscale_status, ollama_models, ollama_chat, gpu_stats, ollama_chat_stream, export_backup, import_backup])
         .run(tauri::generate_context!())
         .expect("error while running Hybrid Command Center");
 }
