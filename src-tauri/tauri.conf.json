@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hybrid Command Center",
+  "version": "0.3.0",
+  "identifier": "com.local.hybridcommandcenter",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Hybrid Command Center",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "backgroundColor": "#0b0b15"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFNjM3QTA0MEQ5MTk0NkYKUldSdmxKRU5CSHBqam5hNGhtU2N1MjBoSUw2TnQ5SGNRUFdOVXU4cXpJK0RNakk3WlBHZGtEZmQK",
+      "endpoints": [
+        "https://github.com/stetsonalmond/hybrid-command-center/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

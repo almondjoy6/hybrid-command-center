@@ -1,0 +1,22 @@
+[package]
+name = "hybrid-command-center"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name = "hybrid_command_center_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+rfd = "0.15"
