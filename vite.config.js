@@ -4,5 +4,5 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: { host: '127.0.0.1', port: 1420, strictPort: true,
-    watch: { ignored: ['**/src-tauri/**', '**/target/**', '**/node_modules/**'] } }
+    watch: { ignored: ['**/src-tauri/**', '**/target/**', '**/node_modules/**', '**/native-test-results/**'] } }
 });

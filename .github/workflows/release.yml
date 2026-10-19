@@ -7,6 +7,7 @@ permissions:
   contents: write
 jobs:
   release:
+    if: github.repository == 'almondjoy6/hybrid-command-center'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,12 +16,24 @@ jobs:
           node-version: '24'
       - uses: dtolnay/rust-toolchain@stable
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
+      - name: Validate release metadata
+        run: node --test tests/release.test.js
+      - name: Check signing key is configured
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw 'Missing TAURI_SIGNING_PRIVATE_KEY repository secret' }
+          if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) { throw 'Missing password for the existing encrypted signing key' }
       - name: Validate tag matches Tauri version
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag must match app version v$version" }
+          if ("v$version" -ne $env:RELEASE_TAG) { throw "Tag must match app version v$version" }
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

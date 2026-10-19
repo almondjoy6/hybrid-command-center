@@ -1,6 +1,62 @@
+# Backups and embedded application copy
+[Bb][Aa][Cc][Kk][Uu][Pp]/
+/hybrid-command-center/
+
+# Dependencies and generated builds (at any depth)
 node_modules/
+target/
 dist/
-src-tauri/target/
+build/
+src-tauri/gen/
+coverage/
+test-results/
+native-test-results/
+playwright-report/
+
+# Graphify output and caches
+graphify-out/
+.graphify*/
+.graphify*
+__pycache__/
+*.py[cod]
+.cache/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Credentials; keep the documented environment template
 .env
+.env.*
+!.env.example
 *.key
 *.key.pub
+*.pem
+*.p12
+*.pfx
+credentials.json
+secrets.json
+.aws/
+
+# Local application data and exported backups
+local-data/
+user-data/
+userdata/
+localStorage/
+Local Storage/
+IndexedDB/
+WebView2/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+hybrid-command-center-backup*.json
+hcc-backup*.json

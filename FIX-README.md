@@ -1,0 +1,1 @@
+Viewport fix: forces the shell to cover the entire native WebView viewport and gives the main content the remaining width. Drag/drop behavior unchanged. Run npm run tauri dev. If black space remains, verify the Tauri WebView itself is being resized by the native window.

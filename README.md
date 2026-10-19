@@ -21,7 +21,27 @@ A local-first Windows desktop dashboard built with Tauri 2, React, and Vite. Vio
 5. Optional: Ollama https://ollama.com/download/windows ; run `ollama pull qwen2.5:7b` (or use a model you already have).
 6. Optional: Tailscale https://tailscale.com/download/windows ; sign in and connect.
 
-## Run the app
+## Local dashboard browser tests
+
+Run these commands from this folder (`C:\Projects\hybrid-command-center`), which contains the latest viewport fix. The nested project and `Backup/` copies are older snapshots.
+
+```powershell
+npm install
+npx playwright install chromium
+npm test
+npm run test:e2e
+npm run test:e2e:report
+```
+
+The Playwright suite starts this frontend on `http://127.0.0.1:1421` and runs Chromium at 1920×1080 and 2560×1440. It checks pointer dragging, half/full-width controls, profile switching, viewport coverage, overflow, responsive columns, and layout persistence without changing other saved data. Each test gets fresh browser storage, attaches a screenshot to the HTML report, and retains a trace on failure. Weather and native Tauri responses are local test fixtures; no external API calls or paid services are used.
+
+Vertical scrolling inside the main content panel is intentional. Tests reject horizontal overflow, outer-page scrolling, and panels extending outside their widgets. Native WebView resizing, actual hardware, Ollama, and Tauri backup/restore dialogs require separate desktop checks.
+
+To watch interactions, run `npm run test:e2e -- --headed`; to run one screen size, add `--project=1920x1080`.
+
+Native Windows checks are available with `npm run build:native:test`, then `npm run test:native:smoke` or `npm run test:native`. Run `npm run test:all` for unit, browser, Rust, standalone build and native checks. See [Windows desktop testing](tests/native/README.md) for isolated storage, UI Automation/FlaUI findings, verified WebView2 automation, and remaining release/DPI checks.
+
+## Development startup
 
 Open PowerShell in this extracted project folder:
 
