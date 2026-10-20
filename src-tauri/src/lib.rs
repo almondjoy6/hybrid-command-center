@@ -1,3 +1,4 @@
+mod productivity;
 use serde_json::Value;
 use std::process::Command;
 #[cfg(target_os = "windows")]
@@ -172,7 +173,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![launch_app, open_url, tailscale_status, ollama_models, ollama_chat, gpu_stats, ollama_chat_stream, export_backup, import_backup])
+        .setup(|app| { if let Err(error) = productivity::start(app.handle()) { eprintln!("Notification scheduler unavailable: {error}"); } Ok(()) })
+        .invoke_handler(tauri::generate_handler![launch_app, open_url, tailscale_status, ollama_models, ollama_chat, gpu_stats, ollama_chat_stream, export_backup, import_backup, productivity::productivity_sync])
         .run(tauri::generate_context!())
         .expect("error while running Hybrid Command Center");
 }

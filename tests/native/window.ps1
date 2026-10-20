@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][int]$AppProcessId,
-    [ValidateSet('Inspect', 'Close', 'Diagnostics', 'OpenSettings')][string]$Action = 'Inspect',
+    [ValidateSet('Inspect', 'Close', 'Diagnostics', 'OpenSettings', 'Minimize', 'Restore')][string]$Action = 'Inspect',
     [Parameter(Mandatory = $true)][string]$Executable,
     [Parameter(Mandatory = $true)][string]$LaunchedAt,
     [string]$ExpectedStartTime,
@@ -18,6 +18,31 @@ if ($app) {
         throw "PID $AppProcessId was reused; refusing to access it."
     }
 }
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Collections.Generic;
+public static class NativeWindow {
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
+    public delegate bool EnumWindowCallback(IntPtr hwnd, IntPtr data);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowCallback callback, IntPtr data);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder name, int size);
+    public static string ClassName(IntPtr hwnd) { var name=new StringBuilder(256); GetClassName(hwnd,name,name.Capacity); return name.ToString(); }
+    public static IntPtr[] TauriWindows(uint processId) {
+        var matches=new List<IntPtr>();
+        EnumWindows((hwnd,data) => { uint owner; GetWindowThreadProcessId(hwnd,out owner); if(owner==processId && ClassName(hwnd)=="Tauri Window") matches.Add(hwnd); return true; },IntPtr.Zero);
+        return matches.ToArray();
+    }
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+}
+'@
 if ($Action -eq 'Diagnostics') {
     $processes = @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'")
     $ownedIds = @($AppProcessId)
@@ -29,6 +54,10 @@ if ($Action -eq 'Diagnostics') {
     $owned = @($processes | Where-Object { $_.ProcessId -in $ownedIds -or $_.CommandLine -match $profilePattern })
     [pscustomobject]@{
         appRunning = [bool]$app
+        mainWindowHandle = if ($app) { $app.MainWindowHandle.ToInt64() } else { 0 }
+        mainWindowTitle = if ($app) { $app.MainWindowTitle } else { '' }
+        mainWindowClass = if ($app -and $app.MainWindowHandle -ne 0) { [NativeWindow]::ClassName($app.MainWindowHandle) } else { '' }
+        tauriWindows = @([NativeWindow]::TauriWindows($AppProcessId) | ForEach-Object { @{ handle=$_.ToInt64(); className=[NativeWindow]::ClassName($_); minimized=[NativeWindow]::IsIconic($_) } })
         processes = @($owned | ForEach-Object {
             [pscustomobject]@{
                 pid = $_.ProcessId
@@ -47,8 +76,20 @@ if ($Action -eq 'Diagnostics') {
     exit 0
 }
 if (-not $app) { throw "Test PID $AppProcessId has exited." }
+$deadline = [DateTime]::UtcNow.AddSeconds(30)
+do {
+    $app.Refresh()
+    if ($app.HasExited) { throw "Test PID $AppProcessId has exited." }
+    $windows = @([NativeWindow]::TauriWindows($AppProcessId))
+    if ($windows.Count -gt 1) { throw 'More than one test Tauri window found; refusing an ambiguous target.' }
+    if ($windows.Count -eq 1) { break }
+    Start-Sleep -Milliseconds 200
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($windows.Count -ne 1) { throw 'No test Tauri window appeared within 30 seconds.' }
+# Process.MainWindowHandle can select Tao's internal message target while minimized.
+$hwnd = $windows[0]
 if ($Action -eq 'Close') {
-    if (-not $app.CloseMainWindow()) { throw "Could not request close for test PID $AppProcessId" }
+    if (-not [NativeWindow]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) { throw "Could not request close for test PID $AppProcessId" }
     if (-not $app.WaitForExit(10000)) { throw "Test PID $AppProcessId did not exit after WM_CLOSE; close it manually." }
     exit 0
 }
@@ -57,7 +98,7 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 if ($Action -eq 'OpenSettings') {
     # Used only for the coexistence fixture, whose executable and creation time were checked above.
-    $window = [System.Windows.Automation.AutomationElement]::FromHandle($app.MainWindowHandle)
+    $window = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
     $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, 'Settings')
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -77,26 +118,21 @@ if ($Action -eq 'OpenSettings') {
     '{"settingsOpen":true}'
     exit 0
 }
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class NativeWindow {
-    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
-    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
-    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
-    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+
+if ($Action -eq 'Minimize' -or $Action -eq 'Restore') {
+    $command = if ($Action -eq 'Minimize') { 0xF020 } else { 0xF120 }
+    # Use the same system commands as the window's minimize/restore controls.
+    if (-not [NativeWindow]::PostMessage($hwnd, 0x0112, [IntPtr]$command, [IntPtr]::Zero)) { throw "Could not request test window $Action" }
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $minimized = [NativeWindow]::IsIconic($hwnd)
+        if ($minimized -eq ($Action -eq 'Minimize')) { break }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($minimized -ne ($Action -eq 'Minimize')) { throw "Test window failed to $Action" }
+    @{ minimized = $minimized; windowHandle = $hwnd.ToInt64(); windowClass = [NativeWindow]::ClassName($hwnd) } | ConvertTo-Json -Compress
+    exit 0
 }
-'@
-$deadline = [DateTime]::UtcNow.AddSeconds(30)
-do {
-    $app.Refresh()
-    if ($app.HasExited) { throw 'The test application exited before its window appeared.' }
-    if ($app.MainWindowHandle -ne 0) { break }
-    Start-Sleep -Milliseconds 200
-} while ([DateTime]::UtcNow -lt $deadline)
-if ($app.MainWindowHandle -eq 0) { throw 'No main window appeared within 30 seconds.' }
-$hwnd = $app.MainWindowHandle
 # Read physical client pixels in a per-monitor-aware thread, then convert to Tauri logical units.
 $previousDpi = [NativeWindow]::SetThreadDpiAwarenessContext([IntPtr](-4))
 try {
@@ -120,8 +156,10 @@ try {
     })
     [pscustomobject]@{
         pid = $AppProcessId
+        windowHandle = $hwnd.ToInt64()
+        windowClass = [NativeWindow]::ClassName($hwnd)
         startedAt = $app.StartTime.ToUniversalTime().ToString('o')
-        title = $app.MainWindowTitle
+        title = $window.Current.Name
         visible = [NativeWindow]::IsWindowVisible($hwnd)
         dpi = $dpi
         clientWidth = ($rect.Right - $rect.Left) * 96.0 / $dpi

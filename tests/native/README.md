@@ -107,3 +107,9 @@ Native validation covers the standalone debug executable at the current monitor/
 For a release check, launch the packaged app with a separate WebView2 data folder, confirm 1440×900 initial logical client sizing, move it between monitors with different scaling, resize/maximize/restore, drag a widget, toggle its width, switch profiles and reload. Check that only the test profile persists those edits, then close that instance. Test real-user data only with explicit authorization and a backup.
 
 The unchanged starting commit is tagged `checkpoint/native-testing-baseline-20261015` (`bd26bd1`). The setup is committed separately so its diff can be reviewed without changing application functionality.
+
+## v0.6.0 minimize and restart regression
+
+The helper identifies the actual native window by its verified process ID and `Tauri Window` class. Do not use `.NET Process.MainWindowHandle` for restore or close: while minimized, that heuristic can select the zero-size `Tao Thread Event Target`. Restoring/closing the internal window disrupts the event loop and produces a genuine lingering process caused by the harness.
+
+The suite checks that minimize/restore retain the same HWND, title and nonzero client dimensions. It also exercises notifications while minimized and two full process restarts, covering expired and running countdowns, a paused stopwatch, delivered and pending reminders, and saved dashboard data. Restart is allowed only after a normal exit with code zero and removal of the owned WebView2 processes and CDP listener. Final cleanup checks the replacement process in the same way. No forced termination, longer shutdown timeout or personal application profile is used.

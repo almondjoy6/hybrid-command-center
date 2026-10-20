@@ -9,7 +9,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {chromium, expect} from '@playwright/test';
 import {allocateCdpPort, waitForCdp} from './cdp.js';
 import {checkNativeHost} from './host.js';
-import {DEFAULT_WIDGETS} from '../../src/dashboard/layout.js';
+import {defaultLayout} from '../../src/dashboard/layout.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const run = promisify(execFile);
@@ -45,6 +45,11 @@ before(async () => {
   profileDir = path.join(reportDir, 'WebView2');
   cdpPort = await allocateCdpPort();
   browserArguments = `--remote-debugging-port=${cdpPort} --remote-debugging-address=127.0.0.1 --proxy-server=http://127.0.0.1:9`;
+  await launchNative();
+}, {timeout: 60000});
+
+async function launchNative() {
+  windowInfo = undefined; launchError = undefined;
   launchedAt = new Date().toISOString();
   app = spawn(executable, [], {
     cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
@@ -67,7 +72,27 @@ before(async () => {
     await diagnostics('startup-failure.json', error);
     throw error;
   }
-}, {timeout: 60000});
+}
+
+async function restartNative(label) {
+  const oldPid = app.pid;
+  await windowCommand('Close');
+  assert.equal((await appExit).code, 0, 'The owned application must terminate normally before restart.');
+  await expect.poll(async () => {
+    const remaining = await diagnostics(label + '-restart-cleanup.json');
+    return remaining.processes.length + remaining.listeners.length;
+  }).toBe(0);
+  await launchNative();
+  assert.notEqual(app.pid, oldPid);
+  const version = await waitForCdp(cdpPort, () => app.exitCode === null && app.signalCode === null);
+  const identity = await diagnostics(label + '-restart-identity.json');
+  const owned = identity.processes.find(p => p.descendant && p.usesTestProfile && p.debugArgument === '--remote-debugging-port=' + cdpPort);
+  assert.ok(owned && identity.listeners.some(l => l.pid === owned.pid && l.address === '127.0.0.1'));
+  browser = await chromium.connectOverCDP(version.webSocketDebuggerUrl);
+  let page;
+  await expect.poll(() => { page = browser.contexts()[0].pages().find(p => p.url().startsWith('http://tauri.localhost') || p.url().startsWith('tauri://localhost')); return Boolean(page); }).toBe(true);
+  return page;
+}
 
 after(async () => {
   try {
@@ -109,6 +134,23 @@ test('main window appears with configured logical client dimensions', async () =
       `${measured}=${windowInfo[measured]}, expected ${config.app.windows[0][configured]} logical pixels at DPI ${windowInfo.dpi}. Ensure the desktop can fit the configured window.`);
   }
   await writeFile(path.join(reportDir, 'window.json'), JSON.stringify(windowInfo, null, 2));
+});
+
+test('minimize and restore keep targeting the original Tauri window', async () => {
+  assert.equal(windowInfo.windowClass, 'Tauri Window');
+  const minimized = await windowCommand('Minimize');
+  assert.equal(minimized.minimized, true);
+  assert.equal(minimized.windowHandle, windowInfo.windowHandle);
+  await diagnostics('minimized-window-discovery.json');
+  const restored = await windowCommand('Restore');
+  assert.equal(restored.minimized, false);
+  assert.equal(restored.windowHandle, windowInfo.windowHandle);
+  const actual = await windowCommand('Inspect');
+  assert.equal(actual.windowClass, 'Tauri Window');
+  assert.equal(actual.windowHandle, windowInfo.windowHandle);
+  assert.equal(actual.title, config.app.windows[0].title);
+  assert.ok(actual.clientWidth > 0 && actual.clientHeight > 0, 'Restore must never select the zero-size internal message window.');
+  await writeFile(path.join(reportDir, 'minimize-restore-identity.json'), JSON.stringify({minimized, restored, actual}, null, 2));
 });
 
 test('actual WebView2 supports widget dragging, resizing and profile persistence', async t => {
@@ -196,7 +238,7 @@ test('actual WebView2 supports widget dragging, resizing and profile persistence
   const order = () => page.locator('[data-dashboard-widget]').evaluateAll(nodes => nodes.map(node => node.dataset.dashboardWidget));
   const defaults = await order();
   await capture('default-before-edit', {defaults});
-  assert.deepEqual(defaults, DEFAULT_WIDGETS, 'Fresh Default profile must render all seven intended widgets before editing.');
+  assert.deepEqual(defaults, defaultLayout().filter(item => !item.hidden).map(item => item.id), 'Fresh Default profile must preserve the original visible widgets; productivity widgets are optional.');
   await page.getByRole('button', {name: 'Edit layout', exact: true}).click();
   const editing = await windowCommand();
   await writeFile(path.join(reportDir, 'uia-editing.json'), JSON.stringify(editing, null, 2));
@@ -266,4 +308,88 @@ test('actual WebView2 supports widget dragging, resizing and profile persistence
   await expect.poll(order).toEqual(customOrder);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')).theme), 'cyber');
   await capture('custom-after-reload');
+}, {timeout: 120000});
+
+test('native productivity survives minimization and process restart with durable notification claims', async () => {
+  let page = browser.contexts()[0].pages().find(p => p.url().includes('localhost'));
+  const navigate = name => page.getByRole('navigation').getByRole('button', {name, exact: true}).click();
+  await navigate('Timers');
+  const watch = page.getByRole('region', {name: 'Stopwatch', exact: true});
+  const timer = page.getByRole('region', {name: 'Countdown timer', exact: true});
+  await watch.getByRole('button', {name: 'Start', exact: true}).click();
+  await timer.getByLabel('Minutes', {exact: true}).fill('0');
+  await timer.getByLabel('Seconds', {exact: true}).fill('2');
+  await timer.getByRole('button', {name: 'Set timer', exact: true}).click();
+  await timer.getByRole('button', {name: 'Start', exact: true}).click();
+  const timerId = await page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')).productivity.timer.id);
+  const minimized = await windowCommand('Minimize'); assert.equal(minimized.minimized, true);
+  const receiptPath = path.join(profileDir, 'productivity-notifications-v1', timerId);
+  await expect.poll(async () => { try { return await readFile(receiptPath, 'utf8'); } catch { return ''; } }).toBe('sent');
+  await windowCommand('Restore');
+  await expect(timer.getByRole('status')).toHaveText('Time is up');
+  await watch.getByRole('button', {name: 'Pause', exact: true}).click();
+  const paused = await watch.getByLabel('Elapsed time').textContent(); assert.notEqual(paused, '00:00:00.00');
+  await navigate('Reminders');
+  await page.getByLabel('Name', {exact: true}).fill('Native test reminder');
+  await page.getByLabel('Date', {exact: true}).fill('2026-01-15');
+  await page.getByLabel('Time', {exact: true}).fill('09:00');
+  await page.getByRole('button', {name: 'Create reminder', exact: true}).click();
+  await expect(page.locator('.reminder-item')).toContainText('Notification submitted to Windows');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')));
+  const reminderId = saved.productivity.reminders[0].notificationId;
+  const reminderReceipt = path.join(profileDir, 'productivity-notifications-v1', reminderId);
+  const beforeReceipt = (await import('node:fs/promises')).stat;
+  const receiptTime = (await beforeReceipt(reminderReceipt)).mtimeMs;
+  await writeFile(path.join(reportDir, 'productivity-before-restart.json'), JSON.stringify({timerId, reminderId, paused, minimized: true, notificationSubmission: await readFile(receiptPath, 'utf8')}));
+  page = await restartNative('completed');
+  await navigate('Timers');
+  await expect(page.getByLabel('Elapsed time')).toHaveText(paused);
+  await expect(page.getByRole('region', {name: 'Stopwatch', exact: true}).getByText('Paused', {exact: true})).toBeVisible();
+  await expect(page.getByRole('region', {name: 'Countdown timer', exact: true}).getByRole('status')).toHaveText('Time is up');
+  await navigate('Reminders'); await page.getByLabel('Reminder filter').selectOption('overdue');
+  await expect(page.locator('.reminder-item')).toContainText('Native test reminder');
+  await expect(page.locator('.reminder-item')).toContainText('Notification submitted to Windows');
+  assert.equal((await beforeReceipt(reminderReceipt)).mtimeMs, receiptTime, 'Restart must not dispatch the same reminder again');
+  const restored = await page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')));
+  assert.equal(restored.theme, saved.theme); assert.deepEqual(restored.dashboardProfiles, saved.dashboardProfiles);
+  await navigate('Appearance');
+  for (const name of ['Stopwatch','Countdown timer','Upcoming reminders']) await page.getByRole('checkbox', {name, exact: true}).check();
+  await navigate('Overview');
+  for (const name of ['Stopwatch','Countdown timer','Upcoming reminders']) await expect(page.locator(`[data-dashboard-widget="${name}"]`)).toBeVisible();
+  await page.screenshot({path: path.join(reportDir, 'native-productivity-widgets.png'), mask: [page.locator('[data-dashboard-widget="GPU monitoring"], [data-dashboard-widget="Tailscale"], [data-dashboard-widget="Weather"]')]});
+}, {timeout: 120000});
+
+test('running stopwatch and countdown restore with a pending reminder after process restart', async () => {
+  let page = browser.contexts()[0].pages().find(p => p.url().includes('localhost'));
+  const navigate = name => page.getByRole('navigation').getByRole('button', {name, exact: true}).click();
+  await navigate('Timers');
+  const watch = page.getByRole('region', {name: 'Stopwatch', exact: true});
+  const timer = page.getByRole('region', {name: 'Countdown timer', exact: true});
+  await watch.getByRole('button', {name: 'Reset', exact: true}).click();
+  await watch.getByRole('button', {name: 'Start', exact: true}).click();
+  await timer.getByRole('button', {name: '60 min', exact: true}).click();
+  await timer.getByRole('button', {name: 'Start', exact: true}).click();
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')).productivity.watch.elapsed)).toBeGreaterThan(0);
+  await navigate('Reminders');
+  await page.getByLabel('Name', {exact: true}).fill('Native pending reminder');
+  await page.getByLabel('Date', {exact: true}).fill('2030-01-15');
+  await page.getByLabel('Time', {exact: true}).fill('09:00');
+  await page.getByRole('button', {name: 'Create reminder', exact: true}).click();
+  const before = await page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')));
+  const pending = before.productivity.reminders.find(r => r.name === 'Native pending reminder');
+  assert.equal(before.productivity.timer.running, true);
+  page = await restartNative('running');
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')).productivity.timer.remaining)).toBeLessThan(before.productivity.timer.remaining);
+  const restored = await page.evaluate(() => JSON.parse(localStorage.getItem('hcc-v1')));
+  assert.equal(restored.productivity.timer.id, before.productivity.timer.id);
+  assert.equal(restored.productivity.timer.running, true);
+  assert.ok(restored.productivity.timer.remaining > 0 && restored.productivity.timer.remaining < before.productivity.timer.remaining, 'Countdown must account for the time spent shutting down and restarting.');
+  assert.ok(restored.productivity.watch.elapsed >= before.productivity.watch.elapsed);
+  assert.deepEqual(restored.productivity.reminders.find(r => r.id === pending.id), pending);
+  assert.deepEqual(restored.dashboardProfiles, before.dashboardProfiles);
+  await navigate('Timers');
+  await expect(page.getByRole('region', {name: 'Stopwatch', exact: true}).getByText('Paused', {exact: true})).toBeVisible();
+  await expect(page.getByRole('region', {name: 'Countdown timer', exact: true}).getByRole('status')).toHaveText('Running');
+  await page.getByRole('region', {name: 'Countdown timer', exact: true}).getByRole('button', {name: 'Pause', exact: true}).click();
+  await writeFile(path.join(reportDir, 'running-restoration.json'), JSON.stringify({before: before.productivity, restored: restored.productivity}, null, 2));
 }, {timeout: 120000});

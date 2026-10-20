@@ -284,7 +284,7 @@ test('hardware history has a fixed scale, keyboard inspection, pause and stale f
 
 test('navigation and preferences retain all destinations, themes and saved data', async ({page}, testInfo) => {
   const navigation = page.getByRole('navigation', {name: 'Main navigation'});
-  await expect(navigation.getByRole('button')).toHaveCount(9);
+  await expect(navigation.getByRole('button')).toHaveText(['Overview','Launcher','AI Center','Weather','Tasks & Notes','Servers','Hardware','Timers','Reminders','Appearance','Settings']);
   await navigation.getByRole('button', {name: 'Settings', exact: true}).click();
   await expect(navigation.getByRole('button', {name: 'Settings', exact: true})).toHaveAttribute('aria-current', 'page');
   for (const name of ['Preferences', 'Application Updates', 'Backup & Restore', 'About']) {

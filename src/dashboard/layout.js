@@ -1,4 +1,5 @@
-export const DEFAULT_WIDGETS = ['Quick launch','Local AI · Ollama','Weather','Tasks','Tailscale','GPU monitoring','Recent notes'];
+const productivityWidgets = ['Stopwatch','Countdown timer','Upcoming reminders'];
+export const DEFAULT_WIDGETS = ['Quick launch','Local AI · Ollama','Weather','Tasks','Tailscale','GPU monitoring','Recent notes',...productivityWidgets];
 export const PROFILE_NAMES = ['Default','Gaming','Development','Servers'];
 const wide = ['Quick launch','GPU monitoring'];
 const presets={
@@ -9,7 +10,7 @@ const presets={
 export function presetLayout(name){const p=presets[name];if(!p)return defaultLayout();return defaultLayout(p.order,p.hidden).map(x=>({...x,w:p.wide.includes(x.id)?2:1}));}
 export function defaultLayout(order=DEFAULT_WIDGETS, hidden=[]) {
   const seen = new Set();
-  return [...order,...DEFAULT_WIDGETS].filter(name=>DEFAULT_WIDGETS.includes(name)&&!seen.has(name)&&seen.add(name)).map(id=>({id,w:wide.includes(id)?2:1,hidden:hidden.includes(id)}));
+  return [...order,...DEFAULT_WIDGETS].filter(name=>DEFAULT_WIDGETS.includes(name)&&!seen.has(name)&&seen.add(name)).map(id=>({id,w:wide.includes(id)?2:1,hidden:hidden.includes(id)||productivityWidgets.includes(id)}));
 }
 export function normalizeLayout(items) {
   if(!Array.isArray(items)) return defaultLayout();
